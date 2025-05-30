@@ -1,0 +1,66 @@
+#!/usr/bin/env -S bpftrace --no-warnings
+/*
+ * Purpose:
+ *   Example that shows how to hook into the oracle wait
+ *   event functions kews_update_wait_time and keskthewt.
+ *
+ *   The script will print the wait events incurred by all
+ *   db instances running from the same oracle home and 
+ *   the wait event duration (in ns).
+ *   
+ * Credits:
+ *   This script is based on the ora_wait_trace_12c_18c.py
+ *   bcc script written by Luca Canali (s. also
+ *   https://github.com/LucaCanali/Linux_tracing_scripts/blob/master/BPF-bcc_Userspace_Oracle/ora_wait_trace_12c_18c.py).
+ *
+ * Author:
+ *   Christoph Lutz
+ *
+ * Date:
+ *   May-30 2025
+ *
+ * Notes:
+ *   Adjust the ORACLE_HOME path for your environment.
+ *
+ *   If you have multiple oracle homes, add a uprobe for
+ *   every oracle home that you want to trace.
+ *
+ * Tested on:
+ *   Oracle 23ai free (23.7.0.25.01), VirtualBox Image,
+ *   kernel 5.15.0-308.179.6.3, bpftrace 0.16
+ */
+
+BEGIN
+{
+    @kspssidst = uptr(0x6000b9f0);
+}
+
+uprobe:/opt/oracle/product/23ai/dbhomeFree/bin/oracle:kews_update_wait_time
+{
+    $ela_us = (uint64) arg1;
+    @wait_time[pid] = $ela_us > 0 ? $ela_us : 0;
+}
+
+uprobe:/opt/oracle/product/23ai/dbhomeFree/bin/oracle:kskthewt
+/ @wait_time[pid] /
+{
+    $ksledt = *(uint64 *) uptr(0x60007ea8);
+    $ksled_sz = (uint64) 0x38;
+
+    $ev_num = (uint64) arg1;
+    $ev_off = (uint64) ($ev_num * $ksled_sz);
+    $kslednam_p = *(uint64 *) uptr($ksledt + $ev_off);
+
+    // printf("DEBUG: kslednam_p=%p\n", $kslednam_p);
+    printf("sid: %s pid: %ld comm: %s event#=%d name=%s ", 
+           str(@kspssidst), pid, comm, $ev_num, str(uptr($kslednam_p)));
+    printf("ela=%lu\n", @wait_time[pid]);
+
+    @wait_time[pid] = 0;
+}
+
+END
+{
+    clear(@kspssidst);
+    clear(@wait_time);
+}
